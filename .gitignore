@@ -30,3 +30,6 @@ target/
 data/raw/
 *.env
 credentials*.json
+
+# IDE settings
+.idea/
