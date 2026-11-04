@@ -33,3 +33,4 @@ credentials*.json
 
 # IDE settings
 .idea/
+.Rproj.user

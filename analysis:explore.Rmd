@@ -1,0 +1,99 @@
+---
+title: "Exploring SEA Arrivals: Oct 15, 2026"
+output: html_document
+date: "2026-11-03"
+---
+```{r}
+library(tidyverse)
+```
+## Load the data
+```{r}
+positions <- read_csv("data/raw/sea_2026-10-15_17utc.csv")
+head(positions)
+```
+## Sanity Checks
+```{r}
+nrow(positions)
+n_distinct(positions$icao24)
+```
+```{r}
+n_distinct(positions$callsign)
+max(positions$baroaltitude)
+```
+## All traffic
+```{r}
+library(leaflet)
+
+
+leaflet(positions) |>
+  addTiles() |>
+  addCircleMarkers(lng = ~lon, lat = ~lat, radius = 1, stroke = FALSE,
+                   fillOpacity = 0.5,
+                   popup = ~paste(callsign, "-", round(baroaltitude), "m"))
+```
+## Arrivals Only
+```{r}
+# SEA Airport location
+sea_lat <- 47.449
+sea_lon <- -122.309
+
+# One summary row per flight
+flights <- positions |>
+  arrange(icao24, time) |>
+  group_by(icao24, callsign) |>
+  summarise(
+    start_alt = first(baroaltitude),
+    end_alt = last(baroaltitude),
+    end_lat = last(lat),
+    end_lon = last(lon),
+    n_points = n(),
+    .groups = "drop"
+  )
+# IDs of the arriving aircraft
+arrival_ids <- flights |>
+  filter(end_alt < 1000,
+         end_alt < start_alt,
+         abs(end_lat - sea_lat) < 0.15,
+         abs(end_lon - sea_lon) < 0.15) |>
+  pull(icao24)
+#All positions for just those aircraft
+arrivals <- positions |>
+  filter(icao24 %in% arrival_ids) |>
+  arrange(icao24, time)
+
+length(arrival_ids)
+```
+```{r}
+# Turn between two headings, from -180 to 180 (handles 350 -> 10 = +20)
+heading_change <- function(from, to) {
+  ((to - from + 540) %% 360) - 180
+}
+
+turning <- arrivals |>
+  group_by(icao24, callsign) |>
+  mutate(turn = heading_change(lag(heading), heading)) |>
+  summarise(
+    total_turn = sum(abs(turn), na.rm = TRUE),
+    mintues    = (max(time) - min(time)) / 60,
+    .groups    = "drop"
+  ) |>
+  arrange(desc(total_turn))
+head(turning, 10)
+```
+```{r}
+pick <- "DAL868"
+
+one <- arrivals |>
+  filter(str_trim(callsign) == pick) |>
+  arrange(time)
+
+leaflet(one) |>
+  addTiles() |>
+  addPolylines(lng = ~lon, lat = ~lat, weight = 3, color = "red") |>
+  addCircleMarkers(data = head(one, 1), lng = ~lon, lat = ~lat,
+                   radius = 6, color = "green", label = "start") |>
+  addCircleMarkers(data = tail(one, 1), lng = ~lon, lat = ~lat,
+                   radius = 6, color = "black", label = "end")
+```
+
+
