@@ -34,3 +34,9 @@ credentials*.json
 # IDE settings
 .idea/
 .Rproj.user
+
+# R session files and knitted output
+.RData
+.Rhistory
+.Rproj.user/
+*.html

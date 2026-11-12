@@ -74,7 +74,7 @@ turning <- arrivals |>
   mutate(turn = heading_change(lag(heading), heading)) |>
   summarise(
     total_turn = sum(abs(turn), na.rm = TRUE),
-    mintues    = (max(time) - min(time)) / 60,
+    minutes    = (max(time) - min(time)) / 60,
     .groups    = "drop"
   ) |>
   arrange(desc(total_turn))
@@ -95,5 +95,94 @@ leaflet(one) |>
   addCircleMarkers(data = tail(one, 1), lng = ~lon, lat = ~lat,
                    radius = 6, color = "black", label = "end")
 ```
+
+## Detecting loops
+
+A loop is about 360 degrees of turning in one direction, within 12 minutes, in an area under 30 km across. Wobbles cancel out because left and right turns have opposite signs.
+
+```{r}
+# Convert lat/lon to x/y in km around SEA (flat approximation, fine at this scale)
+to_km <- function(df) {
+  df |>
+    mutate(x = (lon - sea_lon) * 111.32 * cos(sea_lat * pi / 180),
+           y = (lat - sea_lat) * 111.32)
+}
+
+find_loops <- function(flight, max_minutes = 12, max_size_km = 30) {
+  flight <- flight |> arrange(time) |> to_km()
+  turn <- heading_change(lag(flight$heading), flight$heading)
+  turn[is.na(turn)] <- 0
+
+  loops <- list()
+  n <- nrow(flight)
+  i <- 1
+
+  while (i < n) {
+    cumul <- 0
+    found <- FALSE
+    for (j in (i + 1):n) {
+      if ((flight$time[j] - flight$time[i]) / 60 > max_minutes) break
+      cumul <- cumul + turn[j]
+      if (abs(cumul) >= 340) {
+        found <- TRUE
+        break
+      }
+    }
+
+    if (found) {
+      seg  <- flight[i:j, ]
+      size <- max(max(seg$x) - min(seg$x), max(seg$y) - min(seg$y))
+      if (size <= max_size_km) {
+        spread <- eigen(cov(cbind(seg$x, seg$y)))$values
+        loops[[length(loops) + 1]] <- tibble(
+          start_time = flight$time[i],
+          minutes    = (flight$time[j] - flight$time[i]) / 60,
+          direction  = if_else(cumul > 0, "right", "left"),
+          size_km    = size,
+          elongation = sqrt(spread[1] / max(spread[2], 1e-6)),
+          center_lat = mean(seg$lat),
+          center_lon = mean(seg$lon)
+        )
+        i <- j + 1   # skip past this loop and keep looking
+        next
+      }
+    }
+    i <- i + 1
+  }
+  bind_rows(loops)
+}
+
+loops <- arrivals |>
+  group_by(icao24, callsign) |>
+  group_modify(~ find_loops(.x)) |>
+  ungroup() |>
+  mutate(type = if_else(elongation >= 2, "racetrack hold", "vectoring loop"))
+
+loops
+```
+
+Every arrival in grey, with each detected loop marked by type.
+
+```{r}
+pal <- colorFactor(c("red", "orange"),
+                   domain = c("racetrack hold", "vectoring loop"))
+
+loop_map <- leaflet() |> addTiles()
+
+for (id in arrival_ids) {
+  flight <- filter(arrivals, icao24 == id)
+  loop_map <- loop_map |>
+    addPolylines(data = flight, lng = ~lon, lat = ~lat,
+                 color = "grey", weight = 1, opacity = 0.5)
+}
+
+loop_map |>
+  addCircleMarkers(data = loops, lng = ~center_lon, lat = ~center_lat,
+                   color = ~pal(type), radius = 8, fillOpacity = 0.8,
+                   label = ~paste(callsign, "-", type, "-",
+                                  round(minutes, 1), "min")) |>
+  addLegend(pal = pal, values = loops$type, title = "Loop type")
+```
+
 
 
