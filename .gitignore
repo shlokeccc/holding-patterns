@@ -40,3 +40,6 @@ credentials*.json
 .Rhistory
 .Rproj.user/
 *.html
+
+# Processed results (derived from OpenSky data)
+data/processed/

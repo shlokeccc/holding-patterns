@@ -9,13 +9,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Reads an OpenSky CSV export into one time-sorted track per aircraft. */
+/** Reads OpenSky CSV exports. Columns: time, icao24, callsign, lat, lon, baroaltitude, heading, velocity */
 public final class CsvTrackReader {
 
     private CsvTrackReader() {
     }
 
-    /** Expected columns: time, icao24, callsign, lat, lon, baroaltitude, heading, velocity */
+    /** Reads one whole file into a time-sorted track per aircraft. Fine for a single hour. */
     public static Map<String, List<Position>> readTracks(Path csv) throws IOException {
         List<String> lines = Files.readAllLines(csv);
         Map<String, List<Position>> tracks = new TreeMap<>();
@@ -24,21 +24,7 @@ public final class CsvTrackReader {
             if (line.isBlank()) {
                 continue;
             }
-            String[] f = line.split(",", -1);
-            for (int k = 0; k < f.length; k++) {
-                f[k] = f[k].replace("\"", "").trim();   // remove quotes and extra spaces
-            }
-
-            Position p = new Position(
-                    Long.parseLong(f[0]),
-                    f[1],
-                    f[2],
-                    Double.parseDouble(f[3]),
-                    Double.parseDouble(f[4]),
-                    parseOrNaN(f[5]),
-                    parseOrNaN(f[6]),
-                    parseOrNaN(f[7]));
-
+            Position p = parseLine(line);
             tracks.computeIfAbsent(p.icao24(), id -> new ArrayList<>()).add(p);
         }
 
@@ -46,6 +32,23 @@ public final class CsvTrackReader {
             track.sort(Comparator.comparingLong(Position::time));
         }
         return tracks;
+    }
+
+    /** Turns one CSV line into a Position. Works with or without quotes around values. */
+    public static Position parseLine(String line) {
+        String[] f = line.split(",", -1);
+        for (int k = 0; k < f.length; k++) {
+            f[k] = f[k].replace("\"", "").trim();
+        }
+        return new Position(
+                Long.parseLong(f[0]),
+                f[1],
+                f[2],
+                Double.parseDouble(f[3]),
+                Double.parseDouble(f[4]),
+                parseOrNaN(f[5]),
+                parseOrNaN(f[6]),
+                parseOrNaN(f[7]));
     }
 
     /** Missing values (empty or NULL) become NaN instead of crashing. */

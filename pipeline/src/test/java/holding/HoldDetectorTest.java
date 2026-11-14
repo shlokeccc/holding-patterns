@@ -73,4 +73,17 @@ class HoldDetectorTest {
 
         assertTrue(detector.findLoops(builder.build()).isEmpty());
     }
+
+    @Test
+    void smallPracticeLapIsIgnored() {
+        // A small plane flying a traffic pattern: short legs, slow speed, tight turns
+        List<Position> track = new TrackBuilder(0, 50)
+                .straight(40).turn(90, 20)
+                .straight(40).turn(90, 20)
+                .straight(40).turn(90, 20)
+                .straight(40).turn(90, 20)
+                .build();
+
+        assertTrue(detector.findLoops(track).isEmpty());
+    }
 }

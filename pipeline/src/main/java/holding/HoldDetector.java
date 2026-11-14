@@ -13,17 +13,20 @@ public class HoldDetector {
 
     private final double maxMinutes;
     private final double maxSizeKm;
+    private final double minSizeKm;
     private final double minTurnDeg;
     private final double racetrackElongation;
 
     /** Default settings, the same ones the R prototype used. */
+    /** Default settings. Loops smaller than 8 km are practice laps around a runway, not holds. */
     public HoldDetector() {
-        this(12, 30, 340, 2);
+        this(12, 8, 30, 340, 2);
     }
 
-    public HoldDetector(double maxMinutes, double maxSizeKm,
+    public HoldDetector(double maxMinutes, double minSizeKm, double maxSizeKm,
                         double minTurnDeg, double racetrackElongation) {
         this.maxMinutes = maxMinutes;
+        this.minSizeKm = minSizeKm;
         this.maxSizeKm = maxSizeKm;
         this.minTurnDeg = minTurnDeg;
         this.racetrackElongation = racetrackElongation;
@@ -62,7 +65,7 @@ public class HoldDetector {
 
             if (end != -1) {
                 Loop loop = measure(track.subList(i, end + 1), cumulative);
-                if (loop.sizeKm() <= maxSizeKm) {
+                if (loop.sizeKm() >= minSizeKm && loop.sizeKm() <= maxSizeKm) {
                     loops.add(loop);
                     i = end + 1;   // skip past this loop
                     continue;

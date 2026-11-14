@@ -1,0 +1,48 @@
+---
+title: "October 2026: Checking the Detector's Output"
+output: html_document
+---
+
+```{r setup}
+library(tidyverse)
+
+flights <- read_csv("data/processed/flights.csv")
+loops   <- read_csv("data/processed/loops.csv")
+```
+
+## Who is making all these loops?
+
+Classify each loop's callsign: airlines use 3 letters then numbers (ASA416), US private aircraft use N-numbers (N517MS).
+
+```{r}
+loops <- loops |>
+  mutate(
+    callsign = replace_na(callsign, ""),
+    operator = case_when(
+      str_detect(callsign, "^[A-Z]{3}[0-9]") ~ "airline-style",
+      str_detect(callsign, "^N[0-9]")        ~ "private (N-number)",
+      callsign == ""                         ~ "no callsign",
+      TRUE                                   ~ "other"
+    )
+  )
+
+loops |> count(is_arrival, operator)
+```
+
+## The busiest loopers
+
+If a handful of callsigns make hundreds of loops each, they are training or survey flights, not holds.
+
+```{r}
+loops |> count(callsign, operator, sort = TRUE) |> head(15)
+```
+
+## How big are the loops?
+
+Airline holds are big (tens of km). Practice laps around a runway are small.
+
+```{r}
+ggplot(loops, aes(size_km, fill = operator)) +
+  geom_histogram(binwidth = 2) +
+  labs(x = "Loop size (km)", y = "Number of loops", fill = NULL)
+```
