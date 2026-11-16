@@ -5,31 +5,35 @@ import java.util.List;
 
 /**
  * Finds loops in one aircraft's track: about 360 degrees of turning in one
- * direction, within a time limit, inside a small area.
+ * direction, within a time limit, inside an area of the right size, at airliner speed.
  */
 public class HoldDetector {
 
     private static final double KM_PER_DEG_LAT = 111.32;
 
     private final double maxMinutes;
-    private final double maxSizeKm;
     private final double minSizeKm;
+    private final double maxSizeKm;
     private final double minTurnDeg;
     private final double racetrackElongation;
+    private final double minSpeed;
 
-    /** Default settings, the same ones the R prototype used. */
-    /** Default settings. Loops smaller than 8 km are practice laps around a runway, not holds. */
+    /**
+     * Default settings. Loops smaller than 8 km are practice laps around a runway,
+     * and loops slower than 70 m/s are small training planes, not airliners.
+     */
     public HoldDetector() {
-        this(12, 8, 30, 340, 2);
+        this(12, 8, 30, 340, 2, 70);
     }
 
     public HoldDetector(double maxMinutes, double minSizeKm, double maxSizeKm,
-                        double minTurnDeg, double racetrackElongation) {
+                        double minTurnDeg, double racetrackElongation, double minSpeed) {
         this.maxMinutes = maxMinutes;
         this.minSizeKm = minSizeKm;
         this.maxSizeKm = maxSizeKm;
         this.minTurnDeg = minTurnDeg;
         this.racetrackElongation = racetrackElongation;
+        this.minSpeed = minSpeed;
     }
 
     /** Track must be one aircraft's positions, sorted by time. */
@@ -65,7 +69,9 @@ public class HoldDetector {
 
             if (end != -1) {
                 Loop loop = measure(track.subList(i, end + 1), cumulative);
-                if (loop.sizeKm() >= minSizeKm && loop.sizeKm() <= maxSizeKm) {
+                if (loop.sizeKm() >= minSizeKm
+                        && loop.sizeKm() <= maxSizeKm
+                        && loop.avgSpeed() >= minSpeed) {
                     loops.add(loop);
                     i = end + 1;   // skip past this loop
                     continue;
@@ -76,11 +82,11 @@ public class HoldDetector {
         return loops;
     }
 
-    /** Size, shape, center and type of one loop segment. */
+    /** Size, shape, center, speed, altitude and type of one loop segment. */
     private Loop measure(List<Position> seg, double cumulative) {
         int m = seg.size();
-        double refLat = seg.get(0).lat();
-        double refLon = seg.get(0).lon();
+        double refLat = seg.getFirst().lat();
+        double refLon = seg.getFirst().lon();
         double kmPerDegLon = KM_PER_DEG_LAT * Math.cos(Math.toRadians(refLat));
 
         double[] x = new double[m];
@@ -88,6 +94,8 @@ public class HoldDetector {
         double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
         double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
         double sumLat = 0, sumLon = 0;
+        double sumSpeed = 0, sumAlt = 0;
+        int speedCount = 0, altCount = 0;
 
         for (int k = 0; k < m; k++) {
             Position p = seg.get(k);
@@ -99,6 +107,14 @@ public class HoldDetector {
             maxY = Math.max(maxY, y[k]);
             sumLat += p.lat();
             sumLon += p.lon();
+            if (!Double.isNaN(p.velocity())) {
+                sumSpeed += p.velocity();
+                speedCount++;
+            }
+            if (!Double.isNaN(p.altitude())) {
+                sumAlt += p.altitude();
+                altCount++;
+            }
         }
 
         double size = Math.max(maxX - minX, maxY - minY);
@@ -107,8 +123,8 @@ public class HoldDetector {
                 ? LoopType.RACETRACK_HOLD
                 : LoopType.VECTORING_LOOP;
 
-        Position first = seg.get(0);
-        Position last = seg.get(m - 1);
+        Position first = seg.getFirst();
+        Position last = seg.getLast();
         return new Loop(
                 first.time(),
                 last.time(),
@@ -118,6 +134,8 @@ public class HoldDetector {
                 elongation,
                 sumLat / m,
                 sumLon / m,
+                speedCount > 0 ? sumSpeed / speedCount : Double.NaN,
+                altCount > 0 ? sumAlt / altCount : Double.NaN,
                 type);
     }
 

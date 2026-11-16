@@ -33,8 +33,8 @@ class HoldDetectorTest {
         List<Loop> loops = detector.findLoops(track);
 
         assertEquals(1, loops.size());
-        assertEquals(LoopType.RACETRACK_HOLD, loops.get(0).type());
-        assertEquals("right", loops.get(0).direction());
+        assertEquals(LoopType.RACETRACK_HOLD, loops.getFirst().type());
+        assertEquals("right", loops.getFirst().direction());
     }
 
     @Test
@@ -50,7 +50,7 @@ class HoldDetectorTest {
         List<Loop> loops = detector.findLoops(track);
 
         assertEquals(1, loops.size());
-        assertEquals(LoopType.VECTORING_LOOP, loops.get(0).type());
+        assertEquals(LoopType.VECTORING_LOOP, loops.getFirst().type());
     }
 
     @Test
@@ -82,6 +82,19 @@ class HoldDetectorTest {
                 .straight(40).turn(90, 20)
                 .straight(40).turn(90, 20)
                 .straight(40).turn(90, 20)
+                .build();
+
+        assertTrue(detector.findLoops(track).isEmpty());
+    }
+
+    @Test
+    void slowPlaneFlyingAHoldShapeIsIgnored() {
+        // Same racetrack shape as a real hold, but at training-plane speed (50 m/s)
+        List<Position> track = new TrackBuilder(0, 50)
+                .straight(180)
+                .turn(180, 60)
+                .straight(180)
+                .turn(180, 60)
                 .build();
 
         assertTrue(detector.findLoops(track).isEmpty());

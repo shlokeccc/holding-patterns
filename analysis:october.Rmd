@@ -46,3 +46,64 @@ ggplot(loops, aes(size_km, fill = operator)) +
   geom_histogram(binwidth = 2) +
   labs(x = "Loop size (km)", y = "Number of loops", fill = NULL)
 ```
+
+## Airline arrivals at SEA: how many were delayed?
+
+```{r}
+arrivals <- flights |>
+  filter(is_arrival, is_airline)
+
+arrivals |>
+  summarise(
+    arrivals       = n(),
+    with_loop      = sum(n_loops > 0),
+    percent        = round(100 * mean(n_loops > 0), 1),
+    total_loops    = sum(n_loops)
+  )
+```
+
+What kind of loops were they, and who flew them? Check that the flight school (RFS) is gone.
+
+```{r}
+holds <- loops |>
+  filter(is_arrival, is_airline)
+
+holds |> count(type)
+holds |> count(callsign, sort = TRUE) |> head(10)
+```
+
+Delays by day. Bad-weather days should stand out.
+
+```{r}
+daily <- arrivals |>
+  mutate(date = as_date(as_datetime(end_time, tz = "America/Los_Angeles"))) |>
+  group_by(date) |>
+  summarise(arrivals = n(), delayed = sum(n_loops > 0))
+
+ggplot(daily, aes(date, delayed)) +
+  geom_col() +
+  labs(x = NULL, y = "Arrivals with at least one loop",
+       title = "Airborne delay at SEA, October 2026")
+```
+
+## Can speed and altitude separate airliners from the flight school?
+
+```{r}
+holds <- loops |>
+  filter(is_arrival, is_airline) |>
+  mutate(group = if_else(str_starts(callsign, "RFS"), "RFS fleet", "other airline-style"))
+
+holds |>
+  group_by(group) |>
+  summarise(
+    loops        = n(),
+    median_speed = round(median(avg_speed, na.rm = TRUE)),
+    median_alt   = round(median(avg_alt, na.rm = TRUE))
+  )
+
+ggplot(holds, aes(avg_speed, avg_alt, color = group)) +
+  geom_point(alpha = 0.6) +
+  labs(x = "Average ground speed in the loop (m/s)",
+       y = "Average altitude in the loop (m)",
+       color = NULL)
+```

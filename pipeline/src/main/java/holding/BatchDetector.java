@@ -46,7 +46,7 @@ public class BatchDetector {
                 + "start_alt,end_alt,end_lat,end_lon,is_arrival,is_airline,n_loops");
         flightsOut.newLine();
         loopsOut.write("icao24,callsign,is_arrival,is_airline,start_time,end_time,minutes,"
-                + "direction,size_km,elongation,center_lat,center_lon,type");
+                + "direction,size_km,elongation,center_lat,center_lon,avg_speed,avg_alt,type");
         loopsOut.newLine();
     }
 
@@ -155,7 +155,7 @@ public class BatchDetector {
             writeRow(loopsOut, first.icao24(), callsign, arrival, airline,
                     loop.startTime(), loop.endTime(), loop.minutes(), loop.direction(),
                     loop.sizeKm(), loop.elongation(), loop.centerLat(), loop.centerLon(),
-                    loop.type());
+                    loop.avgSpeed(), loop.avgAltitude(), loop.type());
         }
     }
 
