@@ -1,16 +1,21 @@
 ---
-title: "October 2026: Checking the Detector's Output"
+title: "October 2026: Airborne Delay at SEA"
 output: html_document
 ---
 
-```{r setup}
-library(tidyverse)
-
-flights <- read_csv("data/processed/flights.csv")
-loops   <- read_csv("data/processed/loops.csv")
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = here::here())
 ```
 
-## Who is making all these loops?
+```{r load, message = FALSE}
+library(tidyverse)
+library(leaflet)
+
+flights <- read_csv("data/processed/flights.csv", show_col_types = FALSE)
+loops   <- read_csv("data/processed/loops.csv", show_col_types = FALSE)
+```
+
+## Who is making the loops?
 
 Classify each loop's callsign: airlines use 3 letters then numbers (ASA416), US private aircraft use N-numbers (N517MS).
 
@@ -31,7 +36,7 @@ loops |> count(is_arrival, operator)
 
 ## The busiest loopers
 
-If a handful of callsigns make hundreds of loops each, they are training or survey flights, not holds.
+If a handful of callsigns make many loops each, they are training, survey or military flights, not holds.
 
 ```{r}
 loops |> count(callsign, operator, sort = TRUE) |> head(15)
@@ -39,12 +44,34 @@ loops |> count(callsign, operator, sort = TRUE) |> head(15)
 
 ## How big are the loops?
 
-Airline holds are big (tens of km). Practice laps around a runway are small.
+Airline holds are big (tens of km). Practice laps around a runway are small. The detector now ignores loops under 8 km, based on an earlier version of this chart.
 
 ```{r}
 ggplot(loops, aes(size_km, fill = operator)) +
   geom_histogram(binwidth = 2) +
   labs(x = "Loop size (km)", y = "Number of loops", fill = NULL)
+```
+
+## How the 70 m/s speed rule was chosen
+
+In an earlier run, a training fleet with airline-style callsigns (RFS) made most of the "airline holds." Its loops were all slower than about 60 m/s, while airliners loop at about 100 to 150 m/s, so the detector now ignores loops slower than 70 m/s. With that rule in place, only airliner loops remain below.
+
+```{r}
+holds <- loops |>
+  filter(is_arrival, is_airline)
+
+holds |>
+  summarise(
+    loops        = n(),
+    median_speed = round(median(avg_speed, na.rm = TRUE)),
+    median_alt   = round(median(avg_alt, na.rm = TRUE))
+  )
+
+ggplot(holds, aes(avg_speed, avg_alt, color = type)) +
+  geom_point(alpha = 0.7) +
+  labs(x = "Average ground speed in the loop (m/s)",
+       y = "Average altitude in the loop (m)",
+       color = NULL)
 ```
 
 ## Airline arrivals at SEA: how many were delayed?
@@ -55,24 +82,21 @@ arrivals <- flights |>
 
 arrivals |>
   summarise(
-    arrivals       = n(),
-    with_loop      = sum(n_loops > 0),
-    percent        = round(100 * mean(n_loops > 0), 1),
-    total_loops    = sum(n_loops)
+    arrivals    = n(),
+    with_loop   = sum(n_loops > 0),
+    percent     = round(100 * mean(n_loops > 0), 1),
+    total_loops = sum(n_loops)
   )
 ```
 
-What kind of loops were they, and who flew them? Check that the flight school (RFS) is gone.
+What kind of loops were they, and who flew them?
 
 ```{r}
-holds <- loops |>
-  filter(is_arrival, is_airline)
-
 holds |> count(type)
 holds |> count(callsign, sort = TRUE) |> head(10)
 ```
 
-Delays by day. Bad-weather days should stand out.
+## Delays by day
 
 ```{r}
 daily <- arrivals |>
@@ -86,24 +110,114 @@ ggplot(daily, aes(date, delayed)) +
        title = "Airborne delay at SEA, October 2026")
 ```
 
-## Can speed and altitude separate airliners from the flight school?
+## Validation: checking the detector by hand
+
+Helpers to load the raw positions for any one flight from the hourly files.
 
 ```{r}
-holds <- loops |>
-  filter(is_arrival, is_airline) |>
-  mutate(group = if_else(str_starts(callsign, "RFS"), "RFS fleet", "other airline-style"))
+# Hourly file that contains a given Unix time
+hour_file <- function(t) {
+  h <- as_datetime(floor(t / 3600) * 3600, tz = "UTC")
+  sprintf("data/raw/hours/sea_%s_%02dutc.csv", format(h, "%Y-%m-%d"), hour(h))
+}
 
-holds |>
-  group_by(group) |>
+# All positions for one aircraft between two times, across however many hour files that spans
+flight_positions <- function(id, start, end) {
+  hours <- seq(floor(start / 3600) * 3600, floor(end / 3600) * 3600, by = 3600)
+  read_csv(hour_file(hours),
+           col_types = cols(icao24 = "c", callsign = "c", .default = "d")) |>
+    filter(icao24 == id, time >= start, time <= end) |>
+    arrange(time)
+}
+```
+
+Pick the flights to check: 30 detected at random, and the 30 longest arrivals with no loop found. The seed makes the random pick the same every time.
+
+```{r}
+set.seed(42)
+
+detected <- arrivals |>
+  filter(n_loops > 0) |>
+  slice_sample(n = 30) |>
+  mutate(sample = "detected")
+
+undetected <- arrivals |>
+  filter(n_loops == 0) |>
+  slice_max(minutes, n = 30) |>
+  mutate(sample = "not detected (longest)")
+
+to_label <- bind_rows(detected, undetected) |>
+  mutate(id = row_number())
+
+labels_path <- "data/processed/labels.csv"
+if (!file.exists(labels_path)) {
+  to_label |>
+    transmute(id, sample, icao24, callsign, minutes = round(minutes), n_loops,
+              label = "", notes = "") |>
+    write_csv(labels_path)
+}
+```
+
+Draw one flight: red path, green start, black end, blue circle on each detected loop.
+
+```{r}
+show_flight <- function(k) {
+  f <- to_label[k, ]
+  pos <- flight_positions(f$icao24, f$start_time, f$end_time)
+  found <- loops |>
+    filter(icao24 == f$icao24, start_time >= f$start_time, end_time <= f$end_time)
+
+  m <- leaflet(pos, height = 350) |>
+    addTiles() |>
+    addPolylines(lng = ~lon, lat = ~lat, color = "red", weight = 3) |>
+    addCircleMarkers(data = head(pos, 1), lng = ~lon, lat = ~lat,
+                     color = "green", radius = 6, label = "start") |>
+    addCircleMarkers(data = tail(pos, 1), lng = ~lon, lat = ~lat,
+                     color = "black", radius = 6, label = "end")
+
+  if (nrow(found) > 0) {
+    m <- m |>
+      addCircleMarkers(data = found, lng = ~center_lon, lat = ~center_lat,
+                       color = "blue", radius = 12, label = ~type)
+  }
+
+  m |> addControl(paste0("#", k, "  ", f$callsign, "  |  ", f$sample,
+                         "  |  ", round(f$minutes), " min"),
+                  position = "topright")
+}
+```
+
+All 60 flights, one map each. Knit this file to scroll through them.
+
+```{r}
+htmltools::tagList(lapply(seq_len(nrow(to_label)), show_flight))
+```
+
+## Validation results
+
+Labels come from a visual review of each flight's path (AI-assisted), made without seeing the detector's answer.
+
+```{r}
+labels <- read_csv("data/processed/labels.csv", show_col_types = FALSE)
+
+checked <- to_label |>
+  select(id, sample, callsign, n_loops) |>
+  left_join(labels |> select(id, label, notes), by = "id")
+
+checked |> count(sample, label)
+
+checked |>
+  filter(sample == "detected") |>
   summarise(
-    loops        = n(),
-    median_speed = round(median(avg_speed, na.rm = TRUE)),
-    median_alt   = round(median(avg_alt, na.rm = TRUE))
+    checked   = n(),
+    real_loop = sum(label != "none"),
+    precision = round(100 * mean(label != "none"))
   )
 
-ggplot(holds, aes(avg_speed, avg_alt, color = group)) +
-  geom_point(alpha = 0.6) +
-  labs(x = "Average ground speed in the loop (m/s)",
-       y = "Average altitude in the loop (m)",
-       color = NULL)
+checked |>
+  filter(sample == "not detected (longest)") |>
+  summarise(
+    checked      = n(),
+    missed_loops = sum(label != "none")
+  )
 ```

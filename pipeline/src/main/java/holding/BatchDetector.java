@@ -19,8 +19,9 @@ import java.util.stream.Stream;
  */
 public class BatchDetector {
 
-    private static final long MAX_GAP_SECONDS = 600;   // 10 minutes of silence ends a flight
+    private static final long MAX_GAP_SECONDS = 600;     // 10 minutes of silence ends a flight
     private static final double KM_PER_DEG_LAT = 111.32;
+    private static final double MIN_AIRLINER_SPEED = 70; // m/s, flight average; training planes fly ~50
 
     // Airports near SEA whose landings must not count as SEA arrivals: {lat, lon}
     private static final double[] SEA = {47.449, -122.309};
@@ -42,7 +43,7 @@ public class BatchDetector {
     BatchDetector(BufferedWriter flightsOut, BufferedWriter loopsOut) throws IOException {
         this.flightsOut = flightsOut;
         this.loopsOut = loopsOut;
-        flightsOut.write("icao24,callsign,start_time,end_time,minutes,n_points,"
+        flightsOut.write("icao24,callsign,start_time,end_time,minutes,n_points,avg_speed,"
                 + "start_alt,end_alt,end_lat,end_lon,is_arrival,is_airline,n_loops");
         flightsOut.newLine();
         loopsOut.write("icao24,callsign,is_arrival,is_airline,start_time,end_time,minutes,"
@@ -132,8 +133,9 @@ public class BatchDetector {
         Position first = track.getFirst();
         Position last = track.getLast();
         String callsign = callsignOf(track);
+        double avgSpeed = averageSpeed(track);
         boolean arrival = isSeaArrival(first, last);
-        boolean airline = isAirline(callsign);
+        boolean airline = isAirline(callsign) && avgSpeed >= MIN_AIRLINER_SPEED;
         List<Loop> found = detector.findLoops(track);
 
         flights++;
@@ -147,7 +149,7 @@ public class BatchDetector {
         }
 
         writeRow(flightsOut, first.icao24(), callsign, first.time(), last.time(),
-                (last.time() - first.time()) / 60.0, track.size(),
+                (last.time() - first.time()) / 60.0, track.size(), avgSpeed,
                 first.altitude(), last.altitude(), last.lat(), last.lon(),
                 arrival, airline, found.size());
 
@@ -157,6 +159,19 @@ public class BatchDetector {
                     loop.sizeKm(), loop.elongation(), loop.centerLat(), loop.centerLon(),
                     loop.avgSpeed(), loop.avgAltitude(), loop.type());
         }
+    }
+
+    /** Average ground speed over the whole flight, skipping missing values. NaN if none. */
+    static double averageSpeed(List<Position> track) {
+        double sum = 0;
+        int count = 0;
+        for (Position p : track) {
+            if (!Double.isNaN(p.velocity())) {
+                sum += p.velocity();
+                count++;
+            }
+        }
+        return count > 0 ? sum / count : Double.NaN;
     }
 
     /** Ends low, descending, and closer to SEA than to Boeing Field or Renton. */
@@ -204,9 +219,9 @@ public class BatchDetector {
 
     private void printSummary() {
         System.out.printf("Read %,d positions%n", positionsRead);
-        System.out.printf("%,d flights, %,d SEA arrivals, %,d of them airline-style%n",
+        System.out.printf("%,d flights, %,d SEA arrivals, %,d of them airliners%n",
                 flights, arrivals, airlineArrivals);
-        System.out.printf("%,d loops in total, %,d by airline-style SEA arrivals%n",
+        System.out.printf("%,d loops in total, %,d by airliner SEA arrivals%n",
                 loops, airlineArrivalLoops);
     }
 }
