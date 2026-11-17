@@ -13,14 +13,13 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Runs the hold detector over every hourly file in time order.
+ * Runs the hold and go-around detectors over every hourly file in time order.
  * Splits each aircraft's positions into separate flights wherever there is a gap,
  * and keeps only flights in progress in memory (streaming).
  */
 public class BatchDetector {
 
     private static final long MAX_GAP_SECONDS = 600;     // 10 minutes of silence ends a flight
-    private static final double KM_PER_DEG_LAT = 111.32;
     private static final double MIN_AIRLINER_SPEED = 70; // m/s, flight average; training planes fly ~50
 
     // Airports near SEA whose landings must not count as SEA arrivals: {lat, lon}
@@ -29,6 +28,7 @@ public class BatchDetector {
     private static final double[] RENTON = {47.493, -122.216};
 
     private final HoldDetector detector = new HoldDetector();
+    private final GoAroundDetector goAroundDetector = new GoAroundDetector(SEA[0], SEA[1]);
     private final Map<String, List<Position>> active = new HashMap<>();
     private final BufferedWriter flightsOut;
     private final BufferedWriter loopsOut;
@@ -39,12 +39,13 @@ public class BatchDetector {
     private int airlineArrivals = 0;
     private int loops = 0;
     private int airlineArrivalLoops = 0;
+    private int airlineGoAroundFlights = 0;
 
     BatchDetector(BufferedWriter flightsOut, BufferedWriter loopsOut) throws IOException {
         this.flightsOut = flightsOut;
         this.loopsOut = loopsOut;
         flightsOut.write("icao24,callsign,start_time,end_time,minutes,n_points,avg_speed,"
-                + "start_alt,end_alt,end_lat,end_lon,is_arrival,is_airline,n_loops");
+                + "start_alt,end_alt,end_lat,end_lon,is_arrival,is_airline,n_loops,n_go_arounds");
         flightsOut.newLine();
         loopsOut.write("icao24,callsign,is_arrival,is_airline,start_time,end_time,minutes,"
                 + "direction,size_km,elongation,center_lat,center_lon,avg_speed,avg_alt,type");
@@ -125,7 +126,7 @@ public class BatchDetector {
         active.clear();
     }
 
-    /** Detects loops in one completed flight and writes the results. */
+    /** Detects loops and go-arounds in one completed flight and writes the results. */
     private void finishFlight(List<Position> track) throws IOException {
         if (track.size() < 2) {
             return;
@@ -137,6 +138,7 @@ public class BatchDetector {
         boolean arrival = isSeaArrival(first, last);
         boolean airline = isAirline(callsign) && avgSpeed >= MIN_AIRLINER_SPEED;
         List<Loop> found = detector.findLoops(track);
+        int goArounds = goAroundDetector.countGoArounds(track);
 
         flights++;
         loops += found.size();
@@ -146,12 +148,15 @@ public class BatchDetector {
         if (arrival && airline) {
             airlineArrivals++;
             airlineArrivalLoops += found.size();
+            if (goArounds > 0) {
+                airlineGoAroundFlights++;
+            }
         }
 
         writeRow(flightsOut, first.icao24(), callsign, first.time(), last.time(),
                 (last.time() - first.time()) / 60.0, track.size(), avgSpeed,
                 first.altitude(), last.altitude(), last.lat(), last.lon(),
-                arrival, airline, found.size());
+                arrival, airline, found.size(), goArounds);
 
         for (Loop loop : found) {
             writeRow(loopsOut, first.icao24(), callsign, arrival, airline,
@@ -179,10 +184,10 @@ public class BatchDetector {
         if (!(last.altitude() < 600 && last.altitude() < first.altitude())) {
             return false;
         }
-        double toSea = distanceKm(last, SEA);
+        double toSea = distanceTo(last, SEA);
         return toSea < 25
-                && toSea < distanceKm(last, BOEING_FIELD)
-                && toSea < distanceKm(last, RENTON);
+                && toSea < distanceTo(last, BOEING_FIELD)
+                && toSea < distanceTo(last, RENTON);
     }
 
     /** Airline-style callsign: three letters, then a digit (ASA416, DAL868). */
@@ -190,11 +195,8 @@ public class BatchDetector {
         return callsign.matches("[A-Z]{3}[0-9].*");
     }
 
-    /** Approximate distance in km from a position to an airport {lat, lon}. */
-    static double distanceKm(Position p, double[] airport) {
-        double dy = (p.lat() - airport[0]) * KM_PER_DEG_LAT;
-        double dx = (p.lon() - airport[1]) * KM_PER_DEG_LAT * Math.cos(Math.toRadians(airport[0]));
-        return Math.sqrt(dx * dx + dy * dy);
+    private static double distanceTo(Position p, double[] airport) {
+        return Geo.distanceKm(p.lat(), p.lon(), airport[0], airport[1]);
     }
 
     private static String callsignOf(List<Position> track) {
@@ -223,5 +225,7 @@ public class BatchDetector {
                 flights, arrivals, airlineArrivals);
         System.out.printf("%,d loops in total, %,d by airliner SEA arrivals%n",
                 loops, airlineArrivalLoops);
+        System.out.printf("%,d airliner SEA arrivals had at least one go-around%n",
+                airlineGoAroundFlights);
     }
 }
